@@ -13,6 +13,7 @@ const elements = {
   nameInput: document.querySelector('#nameInput'),
   sharesInput: document.querySelector('#sharesInput'),
   costInput: document.querySelector('#costInput'),
+  todayBasePriceInput: document.querySelector('#todayBasePriceInput'),
   resetFormBtn: document.querySelector('#resetFormBtn'),
   refreshBtn: document.querySelector('#refreshBtn'),
   autoRefreshInput: document.querySelector('#autoRefreshInput'),
@@ -353,6 +354,20 @@ function formatNumber(value, digits = 2) {
   return new Intl.NumberFormat('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
 }
 
+function formatPrice(value) {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+  return new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(value);
+}
+
+function formatBasePrice(value) {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+  return new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 5 }).format(value);
+}
+
 function formatPercent(value) {
   if (!Number.isFinite(value)) {
     return '--';
@@ -385,6 +400,11 @@ function getPreClose(quote) {
   return Number.isFinite(preClose) && preClose > 0 ? preClose : Number.NaN;
 }
 
+function getTodayBasePrice(holding, preClose) {
+  const manualBasePrice = Number(holding?.todayBasePrice);
+  return Number.isFinite(manualBasePrice) && manualBasePrice > 0 ? manualBasePrice : preClose;
+}
+
 function signedClass(value) {
   if (!Number.isFinite(value) || value === 0) {
     return 'muted';
@@ -397,14 +417,16 @@ function buildRows() {
     const quote = quotes.get(holding.code);
     const price = getQuotePrice(quote);
     const preClose = getPreClose(quote);
+    const todayBasePrice = getTodayBasePrice(holding, preClose);
+    const todayBaseSource = Number.isFinite(Number(holding.todayBasePrice)) && Number(holding.todayBasePrice) > 0 ? 'manual' : 'quote';
     const costValue = holding.shares * holding.cost;
     const hasPrice = Number.isFinite(price);
     const marketValue = hasPrice ? holding.shares * price : Number.NaN;
-    const todayProfit = hasPrice && Number.isFinite(preClose) ? holding.shares * (price - preClose) : Number.NaN;
+    const todayProfit = hasPrice && Number.isFinite(todayBasePrice) ? holding.shares * (price - todayBasePrice) : Number.NaN;
     const totalProfit = hasPrice ? marketValue - costValue : Number.NaN;
     const returnRate = costValue > 0 && hasPrice ? totalProfit / costValue : Number.NaN;
 
-    return { holding, quote, price, preClose, costValue, marketValue, todayProfit, totalProfit, returnRate };
+    return { holding, quote, price, preClose, todayBasePrice, todayBaseSource, costValue, marketValue, todayProfit, totalProfit, returnRate };
   });
 }
 
@@ -442,14 +464,15 @@ function rowName(holding, quote) {
 }
 
 function renderDesktopRows(rows) {
-  elements.holdingsBody.innerHTML = rows.map(({ holding, quote, price, preClose, marketValue, todayProfit, totalProfit, returnRate }) => `
+  elements.holdingsBody.innerHTML = rows.map(({ holding, quote, price, preClose, todayBasePrice, todayBaseSource, marketValue, todayProfit, totalProfit, returnRate }) => `
     <tr>
       <td>${escapeHtml(holding.code)}</td>
       <td>${rowName(holding, quote) ? escapeHtml(rowName(holding, quote)) : '<span class="muted">--</span>'}</td>
       <td>${formatNumber(holding.shares, 0)}</td>
-      <td>${formatMoney(holding.cost)}</td>
-      <td>${formatMoney(preClose)}</td>
-      <td>${formatMoney(price)}</td>
+      <td>${formatPrice(holding.cost)}</td>
+      <td>${formatPrice(preClose)}</td>
+      <td>${formatBasePrice(todayBasePrice)}${todayBaseSource === 'manual' ? ' <span class="muted">手动</span>' : ''}</td>
+      <td>${formatPrice(price)}</td>
       <td>${formatMoney(marketValue)}</td>
       <td class="${signedClass(todayProfit)}">${formatMoney(todayProfit)}</td>
       <td class="${signedClass(totalProfit)}">${formatMoney(totalProfit)}</td>
@@ -466,7 +489,7 @@ function renderDesktopRows(rows) {
 }
 
 function renderMobileRows(rows) {
-  elements.mobileHoldings.innerHTML = rows.map(({ holding, quote, price, preClose, marketValue, todayProfit, totalProfit, returnRate }) => `
+  elements.mobileHoldings.innerHTML = rows.map(({ holding, quote, price, preClose, todayBasePrice, todayBaseSource, marketValue, todayProfit, totalProfit, returnRate }) => `
     <article class="holding-card">
       <header>
         <div>
@@ -480,9 +503,10 @@ function renderMobileRows(rows) {
       </header>
       <dl>
         <div><dt>数量</dt><dd>${formatNumber(holding.shares, 0)}</dd></div>
-        <div><dt>成本价</dt><dd>${formatMoney(holding.cost)}</dd></div>
-        <div><dt>昨收</dt><dd>${formatMoney(preClose)}</dd></div>
-        <div><dt>现价</dt><dd>${formatMoney(price)}</dd></div>
+        <div><dt>成本价</dt><dd>${formatPrice(holding.cost)}</dd></div>
+        <div><dt>昨收</dt><dd>${formatPrice(preClose)}</dd></div>
+        <div><dt>今日基准</dt><dd>${formatBasePrice(todayBasePrice)}${todayBaseSource === 'manual' ? ' <span class="muted">手动</span>' : ''}</dd></div>
+        <div><dt>现价</dt><dd>${formatPrice(price)}</dd></div>
         <div><dt>市值</dt><dd>${formatMoney(marketValue)}</dd></div>
         <div><dt>今日盈亏</dt><dd class="${signedClass(todayProfit)}">${formatMoney(todayProfit)}</dd></div>
         <div><dt>总盈亏</dt><dd class="${signedClass(totalProfit)}">${formatMoney(totalProfit)}</dd></div>
@@ -578,6 +602,8 @@ elements.form.addEventListener('submit', async (event) => {
   const code = normalizeCode(formData.get('code'));
   const shares = Number(formData.get('shares'));
   const cost = Number(formData.get('cost'));
+  const rawTodayBasePrice = String(formData.get('todayBasePrice') || '').trim();
+  const todayBasePrice = rawTodayBasePrice ? Number(rawTodayBasePrice) : null;
   const name = String(formData.get('name') || '').trim();
 
   if (!isSupportedCode(code)) {
@@ -590,12 +616,17 @@ elements.form.addEventListener('submit', async (event) => {
     return;
   }
 
+  if (todayBasePrice !== null && (!Number.isFinite(todayBasePrice) || todayBasePrice <= 0)) {
+    elements.statusText.textContent = '今日基准价需要为空，或填写大于 0 的数字。';
+    return;
+  }
+
   const submitButton = elements.form.querySelector('button[type="submit"]');
   submitButton.disabled = true;
   submitButton.textContent = '保存中...';
 
   try {
-    const savedHolding = await persistHolding({ code, name, shares, cost });
+    const savedHolding = await persistHolding({ code, name, shares, cost, todayBasePrice });
     const existingIndex = holdings.findIndex((holding) => holding.code === savedHolding.code);
     if (existingIndex >= 0) {
       holdings[existingIndex] = savedHolding;
@@ -635,6 +666,7 @@ async function handleHoldingAction(event) {
     elements.nameInput.value = holding.name || '';
     elements.sharesInput.value = holding.shares;
     elements.costInput.value = holding.cost;
+    elements.todayBasePriceInput.value = holding.todayBasePrice || '';
     nameWasAutoFilled = false;
     elements.statusText.textContent = `正在编辑 ${holding.code}，保存后会覆盖这条持仓。`;
     elements.codeInput.focus();

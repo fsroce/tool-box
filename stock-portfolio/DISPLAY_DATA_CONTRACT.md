@@ -56,6 +56,8 @@ POST /api/display/portfolio/refresh
       "costValue": 168850,
       "price": 1272.86,
       "preClose": 1268,
+      "todayBasePrice": 1268,
+      "todayBaseSource": "quote",
       "marketValue": 127286,
       "todayProfit": 486,
       "totalProfit": -41564,
@@ -102,6 +104,8 @@ interface PositionDisplayItem {
   costValue: number;
   price: number | null;
   preClose: number | null;
+  todayBasePrice: number | null;
+  todayBaseSource: 'quote' | 'manual';
   marketValue: number | null;
   todayProfit: number | null;
   totalProfit: number | null;
@@ -127,6 +131,8 @@ interface PositionDisplayItem {
 | `summary.totalReturn` | 总收益率，小数形式，例如 `0.1234` 表示 `12.34%` |
 | `positions[].price` | 最新价 |
 | `positions[].preClose` | 昨收价 |
+| `positions[].todayBasePrice` | 今日盈亏计算基准价；默认等于昨收价，管理台手动填写后用手动值 |
+| `positions[].todayBaseSource` | 今日基准价来源：`quote` 为行情昨收，`manual` 为管理台手动值 |
 | `positions[].cost` | 成本价 |
 | `positions[].costValue` | 单只持仓成本 |
 | `positions[].marketValue` | 单只持仓市值 |
@@ -140,10 +146,12 @@ interface PositionDisplayItem {
 ```ts
 costValue = shares * cost
 marketValue = shares * price
-todayProfit = shares * (price - preClose)
+todayProfit = shares * (price - todayBasePrice)
 totalProfit = marketValue - costValue
 returnRate = totalProfit / costValue
 ```
+
+`todayBasePrice` 默认使用 `preClose`；如果管理台手动填写今日基准价，则使用手动值。
 
 ## 空值规则
 

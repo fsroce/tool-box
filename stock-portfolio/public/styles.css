@@ -225,7 +225,7 @@ h2 { margin-bottom: 6px; font-size: 1.15rem; }
 
 .holding-form {
   display: grid;
-  grid-template-columns: 1.1fr 1.1fr 0.8fr 0.8fr minmax(180px, auto);
+  grid-template-columns: 1fr 1fr 0.75fr 0.75fr 0.9fr minmax(180px, auto);
   gap: 14px;
   align-items: end;
 }
@@ -294,7 +294,7 @@ input:focus {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1120px;
+  min-width: 1220px;
 }
 
 th, td {

@@ -30,6 +30,11 @@ const numberFormatter = new Intl.NumberFormat('zh-CN', {
   maximumFractionDigits: 2,
 });
 
+const priceFormatter = new Intl.NumberFormat('zh-CN', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 3,
+});
+
 const sharesFormatter = new Intl.NumberFormat('zh-CN', {
   maximumFractionDigits: 4,
 });
@@ -54,6 +59,16 @@ function formatMoney(value) {
 
 function formatNumber(value) {
   return Number.isFinite(Number(value)) ? numberFormatter.format(Number(value)) : '--';
+}
+
+function formatPrice(value) {
+  return Number.isFinite(Number(value)) ? priceFormatter.format(Number(value)) : '--';
+}
+
+function formatBasePrice(value) {
+  return Number.isFinite(Number(value))
+    ? new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 5 }).format(Number(value))
+    : '--';
 }
 
 function formatShares(value) {
@@ -122,13 +137,17 @@ function createMetric(label, value, className = '') {
 
 function renderTablePosition(position) {
   const row = document.createElement('tr');
+  const todayBaseLabel = position.todayBaseSource === 'manual'
+    ? `${formatBasePrice(position.todayBasePrice)} 手动`
+    : formatBasePrice(position.todayBasePrice);
   row.append(
     createCell(position.code || '--'),
     createCell(position.name || '--'),
     createCell(formatShares(position.shares)),
-    createCell(formatNumber(position.cost)),
-    createCell(formatNumber(position.preClose)),
-    createCell(formatNumber(position.price)),
+    createCell(formatPrice(position.cost)),
+    createCell(formatPrice(position.preClose)),
+    createCell(todayBaseLabel),
+    createCell(formatPrice(position.price)),
     createCell(formatMoney(position.marketValue)),
     createCell(formatMoney(position.todayProfit), valueClass(position.todayProfit)),
     createCell(formatMoney(position.totalProfit), valueClass(position.totalProfit)),
@@ -155,8 +174,11 @@ function renderMobilePosition(position) {
 
   const metrics = document.createElement('dl');
   metrics.append(
-    createMetric('现价', formatNumber(position.price)),
-    createMetric('昨收', formatNumber(position.preClose)),
+    createMetric('现价', formatPrice(position.price)),
+    createMetric('昨收', formatPrice(position.preClose)),
+    createMetric('今日基准', position.todayBaseSource === 'manual'
+      ? `${formatBasePrice(position.todayBasePrice)} 手动`
+      : formatBasePrice(position.todayBasePrice)),
     createMetric('今日盈亏', formatMoney(position.todayProfit), valueClass(position.todayProfit)),
     createMetric('总盈亏', formatMoney(position.totalProfit), valueClass(position.totalProfit)),
     createMetric('收益率', formatPercent(position.returnRate), valueClass(position.returnRate)),

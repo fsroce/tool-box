@@ -843,11 +843,13 @@ function updatePortfolioStore(mutator) {
 }
 
 function serializeHolding(row) {
+  const todayBasePrice = Number(row.todayBasePrice ?? row.today_base_price);
   return {
     code: row.code,
     name: row.name || '',
     shares: Number(row.shares),
     cost: Number(row.cost),
+    todayBasePrice: Number.isFinite(todayBasePrice) && todayBasePrice > 0 ? todayBasePrice : null,
     createdAt: row.createdAt || row.created_at || new Date().toISOString(),
     updatedAt: row.updatedAt || row.updated_at || new Date().toISOString(),
   };
@@ -858,6 +860,9 @@ function validateHoldingPayload(payload = {}) {
   const name = String(payload.name || '').trim();
   const shares = Number(payload.shares);
   const cost = Number(payload.cost);
+  const todayBasePrice = payload.todayBasePrice === '' || payload.todayBasePrice == null
+    ? null
+    : Number(payload.todayBasePrice);
 
   if (!code || !isSupportedCode(code)) {
     return { error: '请填写有效的证券代码，例如 600519、000001、600519.SH 或 00700.HK。' };
@@ -867,7 +872,11 @@ function validateHoldingPayload(payload = {}) {
     return { error: '请填写有效的持仓数量和成本价。' };
   }
 
-  return { holding: { code, name, shares, cost } };
+  if (todayBasePrice !== null && (!Number.isFinite(todayBasePrice) || todayBasePrice <= 0)) {
+    return { error: '今日基准价需要为空，或填写大于 0 的数字。' };
+  }
+
+  return { holding: { code, name, shares, cost, todayBasePrice } };
 }
 
 async function listHoldings() {
@@ -888,13 +897,16 @@ async function buildPortfolioDisplayPayload() {
     const quote = quoteMap.get(holding.code);
     const price = quote ? getQuotePrice(quote) : null;
     const preClose = quote ? getQuotePreClose(quote) : null;
+    const manualTodayBasePrice = Number(holding.todayBasePrice);
+    const hasManualTodayBasePrice = Number.isFinite(manualTodayBasePrice) && manualTodayBasePrice > 0;
+    const todayBasePrice = hasManualTodayBasePrice ? manualTodayBasePrice : preClose;
     const quoteDate = quote ? getQuoteDate(quote) : '';
     const quoteTime = quote ? getQuoteTime(quote) : '';
     const rawCostValue = holding.shares * holding.cost;
     const hasPrice = Number.isFinite(price);
-    const hasPreClose = Number.isFinite(preClose);
+    const hasTodayBasePrice = Number.isFinite(todayBasePrice);
     const rawMarketValue = hasPrice ? holding.shares * price : null;
-    const rawTodayProfit = hasPrice && hasPreClose ? holding.shares * (price - preClose) : null;
+    const rawTodayProfit = hasPrice && hasTodayBasePrice ? holding.shares * (price - todayBasePrice) : null;
     const rawTotalProfit = hasPrice ? rawMarketValue - rawCostValue : null;
     const rawReturnRate = rawCostValue > 0 && Number.isFinite(rawTotalProfit) ? rawTotalProfit / rawCostValue : null;
 
@@ -905,7 +917,9 @@ async function buildPortfolioDisplayPayload() {
       cost: holding.cost,
       costValue: roundNumber(rawCostValue),
       price: hasPrice ? price : null,
-      preClose: hasPreClose ? preClose : null,
+      preClose: Number.isFinite(preClose) ? preClose : null,
+      todayBasePrice: hasTodayBasePrice ? todayBasePrice : null,
+      todayBaseSource: hasManualTodayBasePrice ? 'manual' : 'quote',
       marketValue: roundNumber(rawMarketValue),
       todayProfit: roundNumber(rawTodayProfit),
       totalProfit: roundNumber(rawTotalProfit),
