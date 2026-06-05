@@ -46,8 +46,10 @@ loadDotEnv();
 
 const publicDir = join(root, 'public');
 const port = Number(process.env.PORT || 4173);
-const tushareApiName = process.env.TUSHARE_API_NAME || 'realtime_quote';
+const quoteSource = (process.env.TUSHARE_QUOTE_SOURCE || 'sina').toLowerCase();
+const tushareApiName = process.env.TUSHARE_API_NAME;
 const tushareEndpoint = process.env.TUSHARE_ENDPOINT || 'http://api.tushare.pro';
+const realtimeEndpoint = process.env.TUSHARE_REALTIME_ENDPOINT || 'https://hq.sinajs.cn/list=';
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -102,30 +104,82 @@ function tableToObjects(payload) {
   return items.map((item) => Object.fromEntries(fields.map((field, index) => [field, item[index]])));
 }
 
-async function handleQuotes(request, response) {
-  if (request.method !== 'POST') {
-    sendJson(response, 405, { error: 'Method not allowed' });
-    return;
+function toSinaSymbol(tsCode) {
+  const [code, exchange] = tsCode.split('.');
+  return `${exchange.toLowerCase()}${code}`;
+}
+
+function fromSinaSymbol(symbol) {
+  const exchange = symbol.slice(0, 2).toUpperCase();
+  const code = symbol.slice(2);
+  return `${code}.${exchange}`;
+}
+
+function numberOrNull(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseSinaQuoteLine(line) {
+  const match = line.match(/^var hq_str_([a-z]{2}\d{6})="(.*)";?$/i);
+  if (!match || !match[2]) {
+    return null;
   }
 
+  const values = match[2].split(',');
+  if (!values[0]) {
+    return null;
+  }
+
+  return {
+    ts_code: fromSinaSymbol(match[1]),
+    name: values[0],
+    open: numberOrNull(values[1]),
+    pre_close: numberOrNull(values[2]),
+    price: numberOrNull(values[3]),
+    high: numberOrNull(values[4]),
+    low: numberOrNull(values[5]),
+    bid: numberOrNull(values[6]),
+    ask: numberOrNull(values[7]),
+    volume: numberOrNull(values[8]),
+    amount: numberOrNull(values[9]),
+    date: values[30] || '',
+    time: values[31] || '',
+  };
+}
+
+async function fetchSinaRealtimeQuotes(codes) {
+  const sinaSymbols = codes.map(toSinaSymbol).join(',');
+  const url = realtimeEndpoint.includes('{symbols}')
+    ? realtimeEndpoint.replace('{symbols}', sinaSymbols)
+    : `${realtimeEndpoint}${realtimeEndpoint.includes('list=') ? '' : '?list='}${sinaSymbols}`;
+  const sinaResponse = await fetch(url, {
+    headers: {
+      referer: 'https://finance.sina.com.cn/',
+      'user-agent': 'Mozilla/5.0 stock-portfolio/0.1',
+    },
+  });
+
+  if (!sinaResponse.ok) {
+    throw new Error(`实时行情源请求失败：HTTP ${sinaResponse.status}`);
+  }
+
+  const buffer = new Uint8Array(await sinaResponse.arrayBuffer());
+  const text = new TextDecoder('gb18030').decode(buffer);
+  return text
+    .split(/\r?\n/)
+    .map((line) => parseSinaQuoteLine(line.trim()))
+    .filter(Boolean);
+}
+
+async function fetchProQuotes(codes) {
   const token = process.env.TUSHARE_TOKEN;
   if (!token) {
-    sendJson(response, 500, { error: '缺少 TUSHARE_TOKEN，请先复制 .env.example 并配置环境变量。' });
-    return;
+    throw new Error('缺少 TUSHARE_TOKEN：仅在 TUSHARE_QUOTE_SOURCE=pro 时需要配置。');
   }
 
-  let body;
-  try {
-    body = JSON.parse(await readBody(request) || '{}');
-  } catch {
-    sendJson(response, 400, { error: '请求体不是有效 JSON。' });
-    return;
-  }
-
-  const codes = [...new Set((body.codes || []).map(normalizeCode).filter(Boolean))];
-  if (!codes.length) {
-    sendJson(response, 400, { error: '请至少传入一个证券代码。' });
-    return;
+  if (!tushareApiName) {
+    throw new Error('缺少 TUSHARE_API_NAME：Pro HTTP 模式必须指定可用的 Tushare Pro API 名称。');
   }
 
   const fields = [
@@ -156,19 +210,55 @@ async function handleQuotes(request, response) {
   });
 
   if (!tushareResponse.ok) {
-    sendJson(response, 502, { error: `Tushare 请求失败：HTTP ${tushareResponse.status}` });
-    return;
+    throw new Error(`Tushare 请求失败：HTTP ${tushareResponse.status}`);
   }
 
   const tusharePayload = await tushareResponse.json();
   if (tusharePayload.code && tusharePayload.code !== 0) {
-    sendJson(response, 502, { error: tusharePayload.msg || 'Tushare 返回错误。', raw: tusharePayload });
+    throw new Error(tusharePayload.msg || 'Tushare 返回错误。');
+  }
+
+  return tableToObjects(tusharePayload);
+}
+
+async function fetchQuotes(codes) {
+  if (quoteSource === 'sina') {
+    return fetchSinaRealtimeQuotes(codes);
+  }
+
+  if (quoteSource === 'pro') {
+    return fetchProQuotes(codes);
+  }
+
+  throw new Error(`未知行情源：${quoteSource}。可选值：sina、pro。`);
+}
+
+async function handleQuotes(request, response) {
+  if (request.method !== 'POST') {
+    sendJson(response, 405, { error: 'Method not allowed' });
     return;
   }
 
+  let body;
+  try {
+    body = JSON.parse(await readBody(request) || '{}');
+  } catch {
+    sendJson(response, 400, { error: '请求体不是有效 JSON。' });
+    return;
+  }
+
+  const codes = [...new Set((body.codes || []).map(normalizeCode).filter(Boolean))];
+  if (!codes.length) {
+    sendJson(response, 400, { error: '请至少传入一个证券代码。' });
+    return;
+  }
+
+  const quotes = await fetchQuotes(codes);
+
   sendJson(response, 200, {
-    apiName: tushareApiName,
-    quotes: tableToObjects(tusharePayload),
+    source: quoteSource,
+    apiName: quoteSource === 'pro' ? tushareApiName : 'sina-realtime-crawler',
+    quotes,
     fetchedAt: new Date().toISOString(),
   });
 }
