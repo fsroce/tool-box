@@ -12,7 +12,7 @@
         <div class="hero-content">
           <p class="eyebrow">Tool Box / Stock Portfolio</p>
           <h1>我的持仓看板</h1>
-          <p class="hero-copy">录入股票代码、持仓数量和成本价，页面会通过本地 Node 服务调用 Tushare Token 拉取实时行情，自动计算今日盈亏、总盈亏和收益率。</p>
+          <p class="hero-copy">录入股票代码、持仓数量和成本价，服务端会写入 SQLite 并拉取实时行情，自动计算今日盈亏、总盈亏和收益率。</p>
           <div class="refresh-meta" aria-live="polite">
             <span id="lastRefreshText">上次刷新：--</span>
             <span id="nextRefreshText">自动刷新：每 60 秒</span>
@@ -82,7 +82,7 @@
         <div class="section-heading table-heading">
           <div>
             <h2>持仓明细</h2>
-            <p id="statusText">数据保存在当前浏览器；行情源配置只放在服务端环境变量中。</p>
+            <p id="statusText">持仓和成本保存在服务端 SQLite；行情源配置只放在服务端环境变量中。</p>
           </div>
           <button id="clearBtn" class="ghost-button" type="button">清空持仓</button>
         </div>

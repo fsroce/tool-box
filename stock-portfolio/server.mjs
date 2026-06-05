@@ -1,7 +1,9 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
+import sqlite3 from 'sqlite3';
+import { open } from 'sqlite';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -50,6 +52,7 @@ const quoteSource = (process.env.TUSHARE_QUOTE_SOURCE || 'sina').toLowerCase();
 const tushareApiName = process.env.TUSHARE_API_NAME;
 const tushareEndpoint = process.env.TUSHARE_ENDPOINT || 'http://api.tushare.pro';
 const realtimeEndpoint = process.env.TUSHARE_REALTIME_ENDPOINT || 'https://hq.sinajs.cn/list=';
+const portfolioDbPath = process.env.PORTFOLIO_DB_PATH || join(root, 'data', 'portfolio.sqlite');
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -233,6 +236,137 @@ async function fetchQuotes(codes) {
   throw new Error(`未知行情源：${quoteSource}。可选值：sina、pro。`);
 }
 
+async function createPortfolioDatabase() {
+  await mkdir(dirname(portfolioDbPath), { recursive: true });
+  const db = await open({ filename: portfolioDbPath, driver: sqlite3.Database });
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS holdings (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      shares REAL NOT NULL CHECK (shares > 0),
+      cost REAL NOT NULL CHECK (cost >= 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  return db;
+}
+
+const portfolioDb = createPortfolioDatabase();
+
+function serializeHolding(row) {
+  return {
+    code: row.code,
+    name: row.name || '',
+    shares: Number(row.shares),
+    cost: Number(row.cost),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function validateHoldingPayload(payload = {}) {
+  const code = normalizeCode(payload.code);
+  const name = String(payload.name || '').trim();
+  const shares = Number(payload.shares);
+  const cost = Number(payload.cost);
+
+  if (!code || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost) || cost < 0) {
+    return { error: '请填写有效的代码、持仓数量和成本价。' };
+  }
+
+  return { holding: { code, name, shares, cost } };
+}
+
+async function listHoldings() {
+  const db = await portfolioDb;
+  const rows = await db.all(`
+    SELECT code, name, shares, cost, created_at, updated_at
+    FROM holdings
+    ORDER BY created_at ASC, code ASC
+  `);
+  return rows.map(serializeHolding);
+}
+
+async function upsertHolding(holding) {
+  const db = await portfolioDb;
+  await db.run(`
+    INSERT INTO holdings (code, name, shares, cost, created_at, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(code) DO UPDATE SET
+      name = excluded.name,
+      shares = excluded.shares,
+      cost = excluded.cost,
+      updated_at = datetime('now')
+  `, holding.code, holding.name, holding.shares, holding.cost);
+  const row = await db.get(`
+    SELECT code, name, shares, cost, created_at, updated_at
+    FROM holdings
+    WHERE code = ?
+  `, holding.code);
+  return serializeHolding(row);
+}
+
+async function deleteHolding(code) {
+  const db = await portfolioDb;
+  const result = await db.run('DELETE FROM holdings WHERE code = ?', code);
+  return result.changes > 0;
+}
+
+async function clearHoldings() {
+  const db = await portfolioDb;
+  const result = await db.run('DELETE FROM holdings');
+  return result.changes;
+}
+
+async function handleHoldings(request, response) {
+  const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+  const codeFromPath = decodeURIComponent(url.pathname.replace(/^\/api\/holdings\/?/, ''));
+
+  if (request.method === 'GET' && !codeFromPath) {
+    sendJson(response, 200, { holdings: await listHoldings() });
+    return;
+  }
+
+  if ((request.method === 'POST' || request.method === 'PUT') && !codeFromPath) {
+    let body;
+    try {
+      body = JSON.parse(await readBody(request) || '{}');
+    } catch {
+      sendJson(response, 400, { error: '请求体不是有效 JSON。' });
+      return;
+    }
+
+    const { holding, error } = validateHoldingPayload(body);
+    if (error) {
+      sendJson(response, 400, { error });
+      return;
+    }
+
+    sendJson(response, 200, { holding: await upsertHolding(holding) });
+    return;
+  }
+
+  if (request.method === 'DELETE') {
+    if (!codeFromPath) {
+      sendJson(response, 200, { deleted: await clearHoldings() });
+      return;
+    }
+
+    const code = normalizeCode(codeFromPath);
+    if (!code) {
+      sendJson(response, 400, { error: '请提供要删除的证券代码。' });
+      return;
+    }
+
+    const deleted = await deleteHolding(code);
+    sendJson(response, deleted ? 200 : 404, deleted ? { deleted: code } : { error: '未找到对应持仓。' });
+    return;
+  }
+
+  sendJson(response, 405, { error: 'Method not allowed' });
+}
+
 async function handleQuotes(request, response) {
   if (request.method !== 'POST') {
     sendJson(response, 405, { error: 'Method not allowed' });
@@ -288,6 +422,11 @@ async function handleStatic(request, response) {
 
 const server = createServer(async (request, response) => {
   try {
+    if (request.url?.startsWith('/api/holdings')) {
+      await handleHoldings(request, response);
+      return;
+    }
+
     if (request.url?.startsWith('/api/quotes')) {
       await handleQuotes(request, response);
       return;
@@ -302,4 +441,5 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, () => {
   console.log(`持仓看板已启动：http://localhost:${port}`);
+  console.log(`持仓 SQLite 数据库：${portfolioDbPath}`);
 });
