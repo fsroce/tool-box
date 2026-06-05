@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'tool-box.stock-portfolio.holdings.v1';
+const LEGACY_STORAGE_KEY = 'tool-box.stock-portfolio.holdings.v1';
 const REFRESH_INTERVAL_MS = 60_000;
 
 const elements = {
@@ -23,22 +23,90 @@ const elements = {
   totalReturn: document.querySelector('#totalReturn'),
 };
 
-let holdings = loadHoldings();
+let holdings = [];
 let quotes = new Map();
 let autoRefreshTimer;
 let lastRefreshAt;
 let isRefreshing = false;
 
-function loadHoldings() {
+function loadLegacyHoldings() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    const parsed = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-function saveHoldings() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(holdings));
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(payload.error || '服务端请求失败。');
+  }
+
+  return payload;
+}
+
+async function fetchHoldings() {
+  const payload = await requestJson('/api/holdings');
+  return Array.isArray(payload.holdings) ? payload.holdings : [];
+}
+
+async function persistHolding(holding) {
+  const payload = await requestJson('/api/holdings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(holding),
+  });
+  return payload.holding;
+}
+
+async function deleteHolding(code) {
+  await requestJson(`/api/holdings/${encodeURIComponent(code)}`, { method: 'DELETE' });
+}
+
+async function clearServerHoldings() {
+  await requestJson('/api/holdings', { method: 'DELETE' });
+}
+
+async function migrateLegacyHoldingsIfNeeded() {
+  const legacyHoldings = loadLegacyHoldings();
+  if (holdings.length || !legacyHoldings.length) {
+    return;
+  }
+
+  const imported = [];
+  for (const legacyHolding of legacyHoldings) {
+    const code = normalizeCode(legacyHolding.code);
+    const shares = Number(legacyHolding.shares);
+    const cost = Number(legacyHolding.cost);
+    const name = String(legacyHolding.name || '').trim();
+    if (!code || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost) || cost < 0) {
+      continue;
+    }
+
+    imported.push(await persistHolding({ code, name, shares, cost }));
+  }
+
+  if (imported.length) {
+    holdings = await fetchHoldings();
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    elements.statusText.textContent = `已从浏览器旧数据迁移 ${imported.length} 条持仓到服务端 SQLite。`;
+  }
+}
+
+async function loadHoldingsFromServer() {
+  try {
+    holdings = await fetchHoldings();
+    await migrateLegacyHoldingsIfNeeded();
+    renderHoldings();
+    refreshQuotes();
+  } catch (error) {
+    elements.statusText.textContent = error instanceof Error ? error.message : '读取服务端持仓失败。';
+    renderHoldings();
+  }
 }
 
 function normalizeCode(code) {
@@ -296,7 +364,7 @@ async function refreshQuotes({ silent = false } = {}) {
   }
 }
 
-elements.form.addEventListener('submit', (event) => {
+elements.form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const formData = new FormData(elements.form);
   const code = normalizeCode(formData.get('code'));
@@ -309,21 +377,32 @@ elements.form.addEventListener('submit', (event) => {
     return;
   }
 
-  const nextHolding = { code, name, shares, cost };
-  const existingIndex = holdings.findIndex((holding) => holding.code === code);
-  if (existingIndex >= 0) {
-    holdings[existingIndex] = nextHolding;
-  } else {
-    holdings.push(nextHolding);
-  }
+  const submitButton = elements.form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.textContent = '保存中...';
 
-  saveHoldings();
-  elements.form.reset();
-  renderHoldings();
-  refreshQuotes();
+  try {
+    const savedHolding = await persistHolding({ code, name, shares, cost });
+    const existingIndex = holdings.findIndex((holding) => holding.code === savedHolding.code);
+    if (existingIndex >= 0) {
+      holdings[existingIndex] = savedHolding;
+    } else {
+      holdings.push(savedHolding);
+    }
+
+    elements.form.reset();
+    renderHoldings();
+    elements.statusText.textContent = '持仓已保存到服务端 SQLite。';
+    refreshQuotes();
+  } catch (error) {
+    elements.statusText.textContent = error instanceof Error ? error.message : '保存持仓失败。';
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = '保存持仓';
+  }
 });
 
-function handleHoldingAction(event) {
+async function handleHoldingAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button) {
     return;
@@ -344,27 +423,43 @@ function handleHoldingAction(event) {
     return;
   }
 
-  holdings = holdings.filter((item) => item.code !== code);
-  quotes.delete(code);
-  saveHoldings();
-  renderHoldings();
+  button.disabled = true;
+  try {
+    await deleteHolding(code);
+    holdings = holdings.filter((item) => item.code !== code);
+    quotes.delete(code);
+    renderHoldings();
+    elements.statusText.textContent = '持仓已从服务端 SQLite 删除。';
+  } catch (error) {
+    elements.statusText.textContent = error instanceof Error ? error.message : '删除持仓失败。';
+  } finally {
+    button.disabled = false;
+  }
 }
 
 elements.holdingsBody.addEventListener('click', handleHoldingAction);
 elements.mobileHoldings.addEventListener('click', handleHoldingAction);
 elements.refreshBtn.addEventListener('click', () => refreshQuotes());
 elements.autoRefreshInput.addEventListener('change', resetAutoRefreshTimer);
-elements.clearBtn.addEventListener('click', () => {
+elements.clearBtn.addEventListener('click', async () => {
   if (!holdings.length || !confirm('确定清空所有持仓吗？')) {
     return;
   }
-  holdings = [];
-  quotes = new Map();
-  saveHoldings();
-  renderHoldings();
-  elements.statusText.textContent = '已清空持仓。';
+
+  elements.clearBtn.disabled = true;
+  try {
+    await clearServerHoldings();
+    holdings = [];
+    quotes = new Map();
+    renderHoldings();
+    elements.statusText.textContent = '已清空服务端 SQLite 中的持仓。';
+  } catch (error) {
+    elements.statusText.textContent = error instanceof Error ? error.message : '清空持仓失败。';
+  } finally {
+    elements.clearBtn.disabled = false;
+  }
 });
 
 renderHoldings();
 resetAutoRefreshTimer();
-refreshQuotes();
+loadHoldingsFromServer();

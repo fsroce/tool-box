@@ -1,6 +1,6 @@
 # 我的持仓看板
 
-一个独立于 `tool-box` 根目录的子项目，用来替代每天打开行情软件手动查看持仓表现。你可以在浏览器中录入自己的持仓数量和成本价，页面会通过本地 Node 服务读取实时行情，计算总成本、最新市值、今日已盈亏、总盈亏和收益率。
+一个独立于 `tool-box` 根目录的子项目，用来替代每天打开行情软件手动查看持仓表现。你可以在浏览器中录入自己的持仓数量和成本价，页面会通过本地 Node 服务读取实时行情，并把持仓数量和成本价写入服务端 SQLite 数据库，计算总成本、最新市值、今日已盈亏、总盈亏和收益率。
 
 ## 功能
 
@@ -8,7 +8,8 @@
 - 支持自动补全常见 A 股代码后缀：`600519` → `600519.SH`、`000001` → `000001.SZ`。
 - 汇总展示最新市值、今日已盈亏（基于昨日收盘价）、总盈亏（基于成本价）和总收益率。
 - 支持手动“立即刷新”和默认每 60 秒自动刷新，并显示上次刷新时间。
-- 使用浏览器 `localStorage` 保存持仓，不需要数据库。
+- 使用服务端 SQLite 保存持仓和成本价，默认数据库路径为 `stock-portfolio/data/portfolio.sqlite`。
+- 首次升级时会自动把旧版浏览器 `localStorage` 持仓迁移到服务端 SQLite。
 - 默认直接实现 Tushare `realtime_quote` 对应的爬虫实时行情源，不再把 `realtime_quote` 当作 Pro HTTP `api_name` 发送到 `api.tushare.pro`。
 - 如需使用 Tushare Pro HTTP，可切换到 `TUSHARE_QUOTE_SOURCE=pro` 并配置一个真实可用的 Pro HTTP API。
 
@@ -21,7 +22,7 @@ cp .env.prod.example .env.prod
 npm start
 ```
 
-打开 <http://localhost:4173> 即可使用。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；真实 Token 如果用于 Pro HTTP 模式，建议只写在本机的 `.env.prod`，该文件不会提交到 Git。
+打开 <http://localhost:4173> 即可使用。服务端会自动创建 SQLite 数据库和 `holdings` 表。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；真实 Token 如果用于 Pro HTTP 模式，建议只写在本机的 `.env.prod`，该文件不会提交到 Git。
 
 ## 环境变量
 
@@ -33,6 +34,7 @@ npm start
 | `TUSHARE_API_NAME` | 仅 `pro` 模式必填 | 无 | Tushare Pro HTTP API 名称；不要填 `realtime_quote` |
 | `TUSHARE_ENDPOINT` | 否 | `http://api.tushare.pro` | Tushare Pro HTTP Endpoint，仅 `pro` 模式使用 |
 | `PORT` | 否 | `4173` | 本地服务端口 |
+| `PORTFOLIO_DB_PATH` | 否 | `stock-portfolio/data/portfolio.sqlite` | 持仓 SQLite 数据库文件路径 |
 
 ## Token 文件建议
 
@@ -44,5 +46,5 @@ npm start
 
 - Tushare 文档里的 `realtime_quote` 是实时行情爬虫接口，数据来自网络且不进入 Tushare 服务器；本项目默认直接实现这个思路来避免 Pro HTTP API 错误。
 - 实时行情源的可用性、频率、字段和交易时段返回结果取决于上游网络行情源。
-- 持仓数据只保存在当前浏览器，清理浏览器数据后需要重新录入。
+- 持仓数据保存在服务端 SQLite 中；备份或迁移时请一并处理 `PORTFOLIO_DB_PATH` 指向的数据库文件。
 - 这个目录是独立子项目，后续 `tool-box` 可以继续新增其他工具目录。
