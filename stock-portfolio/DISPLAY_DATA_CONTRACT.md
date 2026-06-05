@@ -22,7 +22,7 @@ GET /api/display/portfolio
 POST /api/display/portfolio/refresh
 ```
 
-展示页点击刷新时调用这个接口。接口不需要登录，前端不传行情 token、不传行情源配置；服务端会读取持仓、用服务端环境变量中的行情配置更新价格，然后返回和 `GET /api/display/portfolio` 完全相同的数据结构。行情源可由服务端配置为 `sina` 或 `tushare`；`tushare` 默认使用 Pro `rt_k` 实时日线接口。
+展示页点击刷新时调用这个接口。接口不需要登录，前端不传行情 token、不传行情源配置；服务端会读取持仓、用服务端环境变量中的行情配置更新价格，然后返回和 `GET /api/display/portfolio` 完全相同的数据结构。行情源可由服务端配置为 `sina` 或 `tushare`；`tushare` 默认股票使用 Pro `rt_k` 实时日线接口，ETF 使用 Pro `rt_etf_k` 实时日线接口。
 
 ## Response
 

@@ -5,7 +5,7 @@
 ## 功能
 
 - 录入 / 编辑 / 删除持仓，字段包含股票代码、股票名称、持仓数量、成本价；股票名称为空时会自动从行情源识别并保存。
-- 支持自动补全常见 A 股代码后缀：`600519` → `600519.SH`、`000001` → `000001.SZ`。
+- 支持自动补全常见 A 股代码后缀：`600519` → `600519.SH`、`000001` → `000001.SZ`、`510300` → `510300.SH`。
 - 支持证券代码和名称互查：输入代码可取股票名，输入股票名可返回候选代码。
 - 提供纯展示接口 `/api/display/portfolio` 和价格刷新接口 `/api/display/portfolio/refresh`，服务端读取持仓、更新价格并计算盈亏。
 - 作为独立 Node service 提供管理页面：`/` 和 `/admin` 返回管理台，登录后可以编辑和删除持仓。
@@ -14,7 +14,7 @@
 - 支持手动“立即刷新”和默认每 60 秒自动刷新，并显示上次刷新时间。
 - 使用服务端 JSON 文件保存持仓和成本价，默认路径为 `stock-portfolio/data/portfolio.json`，不依赖原生 sqlite 模块。
 - 首次升级时会自动把旧版浏览器 `localStorage` 持仓迁移到服务端数据文件。
-- 默认可用新浪公开接口更新价格；如果配置了 Tushare Token，则用 Tushare Pro `rt_k` 实时日线接口更新价格，Token 只配置在服务端 `.env.prod`，前端不可见。
+- 默认可用新浪公开接口更新价格；如果配置了 Tushare Token，则股票用 Tushare Pro `rt_k` 实时日线接口更新价格，ETF 用 `rt_etf_k` 实时日线接口更新价格，Token 只配置在服务端 `.env.prod`，前端不可见。
 
 ## 本地运行
 
@@ -47,8 +47,11 @@ npm start
 | `SINA_REALTIME_ENDPOINT` | 否 | `https://hq.sinajs.cn/list=` | 新浪实时行情 endpoint，可用 `{symbols}` 占位符自定义 URL |
 | `SINA_SUGGEST_ENDPOINT` | 否 | `https://suggest3.sinajs.cn/suggest/type=11,12&key=` | 新浪证券名称搜索 endpoint，可用 `{keyword}` 占位符自定义 URL |
 | `TUSHARE_TOKEN` | `PORTFOLIO_QUOTE_SOURCE=tushare` 时必填 | 无 | Tushare Token，只在服务端使用 |
-| `TUSHARE_API_NAME` | 否 | `rt_k` | Tushare API 名称；实时价格默认使用 Pro `rt_k` |
+| `TUSHARE_API_NAME` | 否 | `rt_k` | Tushare 股票实时 API 名称；默认使用 Pro `rt_k` |
+| `TUSHARE_ETF_API_NAME` | 否 | `rt_etf_k` | Tushare ETF 实时 API 名称；默认使用 Pro `rt_etf_k` |
+| `TUSHARE_ETF_TOPIC` | 否 | `HQ_FND_TICK` | 沪市 ETF 调用 `rt_etf_k` 时需要的分类参数 |
 | `TUSHARE_FIELDS` | 否 | `rt_k` 所需字段 | Tushare HTTP 请求字段；一般不需要改 |
+| `TUSHARE_ETF_FIELDS` | 否 | `rt_etf_k` 所需字段 | Tushare ETF HTTP 请求字段；一般不需要改 |
 | `TUSHARE_REALTIME_SRC` | 否 | `sina` | 仅 `TUSHARE_API_NAME=realtime_quote` 且 `TUSHARE_REALTIME_MODE=crawler` 时使用 |
 | `TUSHARE_REALTIME_MODE` | 否 | `http` | 默认走 Tushare HTTP Pro；只有设为 `crawler` 才按 `realtime_quote` 爬虫语义取数 |
 | `TUSHARE_ENDPOINT` | 否 | `http://api.tushare.pro` | Tushare HTTP endpoint |
@@ -67,7 +70,7 @@ npm start
 - 前端不需要 Tushare Token，也不会接触任何行情源凭据。
 - 推荐把这个 Node service 反代到 `bytedarice.com`，展示页和 API 同源时不会触发跨域。
 - 如果展示页和 API 分开部署，只有 `/api/display/portfolio` 和 `/api/display/portfolio/refresh` 会按 `PORTFOLIO_CORS_ORIGINS` 放行跨域；管理接口不会放开。
-- 如果价格更新要走 Tushare Pro，把 `PORTFOLIO_QUOTE_SOURCE=tushare` 和 `TUSHARE_TOKEN` 写入 `stock-portfolio/.env.prod`；默认接口是 `rt_k`。
+- 如果价格更新要走 Tushare Pro，把 `PORTFOLIO_QUOTE_SOURCE=tushare` 和 `TUSHARE_TOKEN` 写入 `stock-portfolio/.env.prod`；股票默认接口是 `rt_k`，ETF 默认接口是 `rt_etf_k`。
 - `realtime_quote` 是 Tushare 的爬虫版实时接口，不是默认路径；只有你显式配置 `TUSHARE_API_NAME=realtime_quote` 和 `TUSHARE_REALTIME_MODE=crawler` 时才会使用。
 - 管理台密码也写入 `stock-portfolio/.env.prod`，不要提交到 Git。
 - 仓库只保留 `.env.prod.example` 模板；`.env.prod` 已加入 `.gitignore`，避免把真实密码或 Token 泄露到 Git 历史。

@@ -78,6 +78,23 @@ const tushareFields = process.env.TUSHARE_FIELDS || [
   'bid_volume1',
   'trade_time',
 ].join(',');
+const tushareEtfApiName = process.env.TUSHARE_ETF_API_NAME || 'rt_etf_k';
+const tushareEtfTopic = process.env.TUSHARE_ETF_TOPIC || 'HQ_FND_TICK';
+const tushareEtfFields = process.env.TUSHARE_ETF_FIELDS || [
+  'ts_code',
+  'name',
+  'pre_close',
+  'high',
+  'open',
+  'low',
+  'close',
+  'vol',
+  'amount',
+  'num',
+  'ask_volume1',
+  'bid_volume1',
+  'trade_time',
+].join(',');
 const portfolioStorePath = resolve(root, process.env.PORTFOLIO_DATA_PATH || process.env.PORTFOLIO_DB_PATH || 'data/portfolio.json');
 const authEnabled = process.env.PORTFOLIO_AUTH_DISABLED !== 'true';
 const authUsername = process.env.PORTFOLIO_AUTH_USERNAME || 'admin';
@@ -174,6 +191,11 @@ function normalizeCode(code) {
 
 function isSupportedCode(code) {
   return /^\d{6}\.(SH|SZ|BJ)$/.test(code) || /^\d{5}\.HK$/.test(code);
+}
+
+function isTushareEtfCode(code) {
+  const normalizedCode = normalizeCode(code);
+  return /^5\d{5}\.SH$/.test(normalizedCode) || /^1\d{5}\.SZ$/.test(normalizedCode);
 }
 
 function tableToObjects(payload) {
@@ -376,22 +398,17 @@ async function fetchTushareRealtimeQuotes(codes) {
   return fetchSinaRealtimeQuotes(codes);
 }
 
-async function fetchTushareHttpQuotes(codes) {
+async function requestTushareHttpQuotes(apiName, params, fields) {
   const token = requireTushareToken();
-  const params = { ts_code: codes.join(',') };
-
-  if (tushareApiName === 'realtime_quote') {
-    params.src = tushareRealtimeSrc;
-  }
 
   const tushareResponse = await fetch(tushareEndpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      api_name: tushareApiName,
+      api_name: apiName,
       token,
       params,
-      fields: tushareFields,
+      fields,
     }),
   });
 
@@ -405,6 +422,71 @@ async function fetchTushareHttpQuotes(codes) {
   }
 
   return tableToObjects(tusharePayload).map(normalizeTushareHttpQuote);
+}
+
+async function fetchTushareStockHttpQuotes(codes) {
+  if (!codes.length) {
+    return [];
+  }
+
+  const params = { ts_code: codes.join(',') };
+
+  if (tushareApiName === 'realtime_quote') {
+    params.src = tushareRealtimeSrc;
+  }
+
+  return requestTushareHttpQuotes(tushareApiName, params, tushareFields);
+}
+
+async function fetchTushareEtfHttpQuotes(codes) {
+  if (!codes.length) {
+    return [];
+  }
+
+  const shCodes = codes.filter((code) => code.endsWith('.SH'));
+  const szCodes = codes.filter((code) => code.endsWith('.SZ'));
+  const quoteRequests = [];
+
+  if (shCodes.length) {
+    quoteRequests.push(requestTushareHttpQuotes(
+      tushareEtfApiName,
+      { ts_code: shCodes.join(','), topic: tushareEtfTopic },
+      tushareEtfFields,
+    ));
+  }
+
+  if (szCodes.length) {
+    quoteRequests.push(requestTushareHttpQuotes(
+      tushareEtfApiName,
+      { ts_code: szCodes.join(',') },
+      tushareEtfFields,
+    ));
+  }
+
+  return (await Promise.all(quoteRequests)).flat();
+}
+
+async function fetchTushareHttpQuotes(codes) {
+  const normalizedCodes = [...new Set(codes.map(normalizeCode).filter(isSupportedCode))];
+  if (!normalizedCodes.length) {
+    return [];
+  }
+
+  if (tushareApiName === 'rt_k') {
+    const etfCodes = normalizedCodes.filter(isTushareEtfCode);
+    const stockCodes = normalizedCodes.filter((code) => !isTushareEtfCode(code));
+    const [stockQuotes, etfQuotes] = await Promise.all([
+      fetchTushareStockHttpQuotes(stockCodes),
+      fetchTushareEtfHttpQuotes(etfCodes),
+    ]);
+    return [...stockQuotes, ...etfQuotes];
+  }
+
+  if (tushareApiName === tushareEtfApiName) {
+    return fetchTushareEtfHttpQuotes(normalizedCodes);
+  }
+
+  return fetchTushareStockHttpQuotes(normalizedCodes);
 }
 
 async function fetchTushareQuotes(codes) {
@@ -425,6 +507,18 @@ async function fetchQuotes(codes) {
   }
 
   throw new Error(`未知行情源：${quoteSource}。可选值：sina、tushare。`);
+}
+
+function getQuoteApiName(codes = []) {
+  if (quoteSource === 'sina') {
+    return 'sina-realtime-crawler';
+  }
+
+  if ((quoteSource === 'tushare' || quoteSource === 'pro') && tushareApiName === 'rt_k' && codes.some(isTushareEtfCode)) {
+    return `${tushareApiName}+${tushareEtfApiName}`;
+  }
+
+  return tushareApiName;
 }
 
 function pickQuoteForCode(quotes, code) {
@@ -1018,7 +1112,7 @@ async function handleQuotes(request, response) {
 
   sendJson(response, 200, {
     source: quoteSource,
-    apiName: quoteSource === 'sina' ? 'sina-realtime-crawler' : tushareApiName,
+    apiName: getQuoteApiName(codes),
     quotes,
     fetchedAt: new Date().toISOString(),
   });
