@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>我的持仓看板</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <div class="hero-content">
+          <p class="eyebrow">Tool Box / Stock Portfolio</p>
+          <h1>我的持仓看板</h1>
+          <p class="hero-copy">录入股票代码、持仓数量和成本价，页面会通过本地 Node 服务调用 Tushare Token 拉取实时行情，自动计算今日盈亏、总盈亏和收益率。</p>
+          <div class="refresh-meta" aria-live="polite">
+            <span id="lastRefreshText">上次刷新：--</span>
+            <span id="nextRefreshText">自动刷新：每 60 秒</span>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button id="refreshBtn" class="primary-button" type="button">立即刷新</button>
+          <label class="auto-refresh-toggle">
+            <input id="autoRefreshInput" type="checkbox" checked />
+            <span>自动刷新</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="summary-grid" aria-label="持仓汇总">
+        <article class="summary-card highlight-card">
+          <span>最新市值</span>
+          <strong id="totalMarketValue">--</strong>
+          <small>按最新价计算</small>
+        </article>
+        <article class="summary-card">
+          <span>今日已盈亏</span>
+          <strong id="todayProfit">--</strong>
+          <small>基于昨日收盘价</small>
+        </article>
+        <article class="summary-card">
+          <span>总盈亏</span>
+          <strong id="totalProfit">--</strong>
+          <small>基于成本价</small>
+        </article>
+        <article class="summary-card">
+          <span>总收益率</span>
+          <strong id="totalReturn">--</strong>
+          <small id="totalCostText">总成本：--</small>
+        </article>
+      </section>
+
+      <section class="panel form-panel">
+        <div class="section-heading">
+          <div>
+            <h2>添加 / 更新持仓</h2>
+            <p>代码支持 600519、000001 或 600519.SH 形式；相同代码会覆盖旧记录。</p>
+          </div>
+        </div>
+        <form id="holdingForm" class="holding-form">
+          <label>
+            <span>股票代码</span>
+            <input id="codeInput" name="code" placeholder="例如 600519.SH" autocomplete="off" required />
+          </label>
+          <label>
+            <span>股票名称（可选）</span>
+            <input id="nameInput" name="name" placeholder="例如 贵州茅台" autocomplete="off" />
+          </label>
+          <label>
+            <span>持仓数量</span>
+            <input id="sharesInput" name="shares" type="number" min="0" step="1" placeholder="例如 100" required />
+          </label>
+          <label>
+            <span>成本价</span>
+            <input id="costInput" name="cost" type="number" min="0" step="0.001" placeholder="例如 1688.50" required />
+          </label>
+          <button class="primary-button form-submit" type="submit">保存持仓</button>
+        </form>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="section-heading table-heading">
+          <div>
+            <h2>持仓明细</h2>
+            <p id="statusText">数据保存在当前浏览器；Token 只放在服务端环境变量中。</p>
+          </div>
+          <button id="clearBtn" class="ghost-button" type="button">清空持仓</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>数量</th>
+                <th>成本价</th>
+                <th>昨收</th>
+                <th>现价</th>
+                <th>市值</th>
+                <th>今日盈亏</th>
+                <th>总盈亏</th>
+                <th>收益率</th>
+                <th>行情时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="holdingsBody"></tbody>
+          </table>
+        </div>
+        <div id="mobileHoldings" class="mobile-holdings" aria-label="移动端持仓明细"></div>
+        <div id="emptyState" class="empty-state">还没有持仓，先添加一条吧。</div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
