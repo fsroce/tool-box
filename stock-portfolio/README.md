@@ -1,6 +1,6 @@
 # 我的持仓看板
 
-一个独立于 `tool-box` 根目录的子项目，用来替代每天打开行情软件手动查看持仓表现。你可以在浏览器中录入自己的持仓数量和成本价，页面会通过本地 Node 服务读取实时行情，并把持仓数量和成本价写入服务端 SQLite 数据库，计算总成本、最新市值、今日已盈亏、总盈亏和收益率。
+一个独立于 `tool-box` 根目录的子项目，用来替代每天打开行情软件手动查看持仓表现。你可以在浏览器中录入自己的持仓数量和成本价，页面会通过本地 Node 服务读取实时行情，并把持仓数量和成本价写入服务端数据文件，计算总成本、最新市值、今日已盈亏、总盈亏和收益率。
 
 ## 功能
 
@@ -12,8 +12,8 @@
 - 汇总展示最新市值、今日已盈亏（基于昨日收盘价）、总盈亏（基于成本价）和总收益率。
 - 管理台需要用户名和密码登录；持仓管理和原始行情 API 受服务端会话鉴权保护。`/api/lookup`、`/api/display/portfolio` 和 `/api/display/portfolio/refresh` 不需要登录。
 - 支持手动“立即刷新”和默认每 60 秒自动刷新，并显示上次刷新时间。
-- 使用服务端 SQLite 保存持仓和成本价，默认数据库路径为 `stock-portfolio/data/portfolio.sqlite`。
-- 首次升级时会自动把旧版浏览器 `localStorage` 持仓迁移到服务端 SQLite。
+- 使用服务端 JSON 文件保存持仓和成本价，默认路径为 `stock-portfolio/data/portfolio.json`，不依赖原生 sqlite 模块。
+- 首次升级时会自动把旧版浏览器 `localStorage` 持仓迁移到服务端数据文件。
 - 默认可用新浪公开接口更新价格；如果配置了 Tushare Token，则用 Tushare Pro `rt_k` 实时日线接口更新价格，Token 只配置在服务端 `.env.prod`，前端不可见。
 
 ## 本地运行
@@ -25,7 +25,7 @@ cp .env.prod.example .env.prod
 npm start
 ```
 
-打开 <http://127.0.0.1:4173> 就是管理台，<http://127.0.0.1:4173/admin> 也会返回同一个管理台。默认用户名是 `admin`，密码来自 `PORTFOLIO_AUTH_PASSWORD`。服务端会自动创建 SQLite 数据库和 `holdings` 表。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；管理密码建议只写在本机的 `.env.prod`，该文件不会提交到 Git。
+打开 <http://127.0.0.1:4173> 就是管理台，<http://127.0.0.1:4173/admin> 也会返回同一个管理台。默认用户名是 `admin`，密码来自 `PORTFOLIO_AUTH_PASSWORD`。服务端会自动创建持仓数据文件。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；管理密码建议只写在本机的 `.env.prod`，该文件不会提交到 Git。
 
 ## 服务路径
 
@@ -55,7 +55,8 @@ npm start
 | `PORT` | 否 | `4173` | 本地服务端口 |
 | `HOST` | 否 | `127.0.0.1` | 服务监听地址；默认只允许本机访问 |
 | `PORTFOLIO_CORS_ORIGINS` | 否 | `https://bytedarice.com,https://www.bytedarice.com` | 允许跨域访问公开展示 API 的 Origin 白名单 |
-| `PORTFOLIO_DB_PATH` | 否 | `stock-portfolio/data/portfolio.sqlite` | 持仓 SQLite 数据库文件路径 |
+| `PORTFOLIO_DATA_PATH` | 否 | `stock-portfolio/data/portfolio.json` | 持仓 JSON 数据文件路径 |
+| `PORTFOLIO_DB_PATH` | 否 | 无 | 旧配置兼容别名；未设置 `PORTFOLIO_DATA_PATH` 时会作为数据文件路径使用 |
 | `PORTFOLIO_AUTH_USERNAME` | 否 | `admin` | 管理台登录用户名 |
 | `PORTFOLIO_AUTH_PASSWORD` | 是 | 无 | 管理台登录密码；鉴权启用时未配置会拒绝登录 |
 | `PORTFOLIO_AUTH_SESSION_TTL_HOURS` | 否 | `12` | 登录会话有效小时数 |
@@ -75,5 +76,5 @@ npm start
 ## 注意事项
 
 - 实时行情源的可用性、频率、字段和交易时段返回结果取决于上游网络行情源。
-- 持仓数据保存在服务端 SQLite 中；备份或迁移时请一并处理 `PORTFOLIO_DB_PATH` 指向的数据库文件。
+- 持仓数据保存在服务端 JSON 文件中；备份或迁移时请一并处理 `PORTFOLIO_DATA_PATH` 指向的数据文件。
 - 这个目录是独立子项目，后续 `tool-box` 可以继续新增其他工具目录。

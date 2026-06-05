@@ -1,10 +1,8 @@
 import { createServer } from 'node:http';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -80,7 +78,7 @@ const tushareFields = process.env.TUSHARE_FIELDS || [
   'bid_volume1',
   'trade_time',
 ].join(',');
-const portfolioDbPath = process.env.PORTFOLIO_DB_PATH || join(root, 'data', 'portfolio.sqlite');
+const portfolioStorePath = resolve(root, process.env.PORTFOLIO_DATA_PATH || process.env.PORTFOLIO_DB_PATH || 'data/portfolio.json');
 const authEnabled = process.env.PORTFOLIO_AUTH_DISABLED !== 'true';
 const authUsername = process.env.PORTFOLIO_AUTH_USERNAME || 'admin';
 const authPassword = process.env.PORTFOLIO_AUTH_PASSWORD || '';
@@ -711,23 +709,44 @@ async function handleAuth(request, response) {
   sendJson(response, 404, { error: 'Not found' });
 }
 
-async function createPortfolioDatabase() {
-  await mkdir(dirname(portfolioDbPath), { recursive: true });
-  const db = await open({ filename: portfolioDbPath, driver: sqlite3.Database });
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS holdings (
-      code TEXT PRIMARY KEY,
-      name TEXT NOT NULL DEFAULT '',
-      shares REAL NOT NULL CHECK (shares > 0),
-      cost REAL NOT NULL CHECK (cost >= 0),
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-  return db;
+async function createPortfolioStore() {
+  await mkdir(dirname(portfolioStorePath), { recursive: true });
+
+  try {
+    const payload = JSON.parse(await readFile(portfolioStorePath, 'utf8'));
+    const holdings = Array.isArray(payload.holdings) ? payload.holdings.map(serializeHolding).filter((holding) => holding.code) : [];
+    return { holdings };
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+
+    const store = { holdings: [] };
+    await savePortfolioStore(store);
+    return store;
+  }
 }
 
-const portfolioDb = createPortfolioDatabase();
+async function savePortfolioStore(store) {
+  await mkdir(dirname(portfolioStorePath), { recursive: true });
+  const tempPath = `${portfolioStorePath}.${process.pid}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify({ holdings: store.holdings }, null, 2)}\n`);
+  await rename(tempPath, portfolioStorePath);
+}
+
+const portfolioStore = createPortfolioStore();
+let portfolioStoreWriteQueue = Promise.resolve();
+
+function updatePortfolioStore(mutator) {
+  const run = portfolioStoreWriteQueue.then(async () => {
+    const store = await portfolioStore;
+    const result = await mutator(store);
+    await savePortfolioStore(store);
+    return result;
+  });
+  portfolioStoreWriteQueue = run.catch(() => {});
+  return run;
+}
 
 function serializeHolding(row) {
   return {
@@ -735,8 +754,8 @@ function serializeHolding(row) {
     name: row.name || '',
     shares: Number(row.shares),
     cost: Number(row.cost),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
+    updatedAt: row.updatedAt || row.updated_at || new Date().toISOString(),
   };
 }
 
@@ -758,13 +777,10 @@ function validateHoldingPayload(payload = {}) {
 }
 
 async function listHoldings() {
-  const db = await portfolioDb;
-  const rows = await db.all(`
-    SELECT code, name, shares, cost, created_at, updated_at
-    FROM holdings
-    ORDER BY created_at ASC, code ASC
-  `);
-  return rows.map(serializeHolding);
+  const store = await portfolioStore;
+  return [...store.holdings]
+    .map(serializeHolding)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.code.localeCompare(right.code));
 }
 
 async function buildPortfolioDisplayPayload() {
@@ -840,34 +856,39 @@ async function buildPortfolioDisplayPayload() {
 }
 
 async function upsertHolding(holding) {
-  const db = await portfolioDb;
-  await db.run(`
-    INSERT INTO holdings (code, name, shares, cost, created_at, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
-    ON CONFLICT(code) DO UPDATE SET
-      name = excluded.name,
-      shares = excluded.shares,
-      cost = excluded.cost,
-      updated_at = datetime('now')
-  `, holding.code, holding.name, holding.shares, holding.cost);
-  const row = await db.get(`
-    SELECT code, name, shares, cost, created_at, updated_at
-    FROM holdings
-    WHERE code = ?
-  `, holding.code);
-  return serializeHolding(row);
+  return updatePortfolioStore((store) => {
+    const now = new Date().toISOString();
+    const existingIndex = store.holdings.findIndex((item) => item.code === holding.code);
+    const nextHolding = serializeHolding({
+      ...holding,
+      createdAt: existingIndex >= 0 ? store.holdings[existingIndex].createdAt : now,
+      updatedAt: now,
+    });
+
+    if (existingIndex >= 0) {
+      store.holdings[existingIndex] = nextHolding;
+    } else {
+      store.holdings.push(nextHolding);
+    }
+
+    return nextHolding;
+  });
 }
 
 async function deleteHolding(code) {
-  const db = await portfolioDb;
-  const result = await db.run('DELETE FROM holdings WHERE code = ?', code);
-  return result.changes > 0;
+  return updatePortfolioStore((store) => {
+    const previousLength = store.holdings.length;
+    store.holdings = store.holdings.filter((holding) => holding.code !== code);
+    return store.holdings.length < previousLength;
+  });
 }
 
 async function clearHoldings() {
-  const db = await portfolioDb;
-  const result = await db.run('DELETE FROM holdings');
-  return result.changes;
+  return updatePortfolioStore((store) => {
+    const deleted = store.holdings.length;
+    store.holdings = [];
+    return deleted;
+  });
 }
 
 async function handleHoldings(request, response) {
@@ -1084,7 +1105,7 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, host, () => {
   console.log(`持仓看板已启动：http://${host}:${port}`);
-  console.log(`持仓 SQLite 数据库：${portfolioDbPath}`);
+  console.log(`持仓数据文件：${portfolioStorePath}`);
   if (authEnabled && !authPassword) {
     console.warn('鉴权已启用，但未配置 PORTFOLIO_AUTH_PASSWORD；登录会被拒绝。');
   }

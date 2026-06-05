@@ -607,8 +607,8 @@ elements.form.addEventListener('submit', async (event) => {
     nameWasAutoFilled = false;
     renderHoldings();
     elements.statusText.textContent = savedHolding.name
-      ? `持仓已保存到服务端 SQLite，名称为 ${savedHolding.name}。`
-      : '持仓已保存到服务端 SQLite。';
+      ? `持仓已保存到服务端数据文件，名称为 ${savedHolding.name}。`
+      : '持仓已保存到服务端数据文件。';
     refreshQuotes();
   } catch (error) {
     elements.statusText.textContent = error instanceof Error ? error.message : '保存持仓失败。';
@@ -647,7 +647,7 @@ async function handleHoldingAction(event) {
     holdings = holdings.filter((item) => item.code !== code);
     quotes.delete(code);
     renderHoldings();
-    elements.statusText.textContent = '持仓已从服务端 SQLite 删除。';
+    elements.statusText.textContent = '持仓已从服务端数据文件删除。';
   } catch (error) {
     elements.statusText.textContent = error instanceof Error ? error.message : '删除持仓失败。';
   } finally {
@@ -727,7 +727,7 @@ elements.clearBtn.addEventListener('click', async () => {
     holdings = [];
     quotes = new Map();
     renderHoldings();
-    elements.statusText.textContent = '已清空服务端 SQLite 中的持仓。';
+    elements.statusText.textContent = '已清空服务端数据文件中的持仓。';
   } catch (error) {
     elements.statusText.textContent = error instanceof Error ? error.message : '清空持仓失败。';
   } finally {
