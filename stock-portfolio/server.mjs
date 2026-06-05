@@ -47,7 +47,7 @@ loadDotEnv();
 
 const publicDir = join(root, 'public');
 const port = Number(process.env.PORT || 4173);
-const host = process.env.HOST || '127.0.0.1';
+const host = process.env.HOST || '0.0.0.0';
 const corsAllowedOrigins = new Set((process.env.PORTFOLIO_CORS_ORIGINS || [
   'https://bytedarice.com',
   'https://www.bytedarice.com',

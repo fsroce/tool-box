@@ -25,7 +25,7 @@ cp .env.prod.example .env.prod
 npm start
 ```
 
-打开 <http://127.0.0.1:4173> 就是管理台，<http://127.0.0.1:4173/admin> 也会返回同一个管理台。默认用户名是 `admin`，密码来自 `PORTFOLIO_AUTH_PASSWORD`。服务端会自动创建持仓数据文件。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；管理密码建议只写在本机的 `.env.prod`，该文件不会提交到 Git。
+打开 <http://127.0.0.1:4173> 就是管理台，<http://127.0.0.1:4173/admin> 也会返回同一个管理台。默认用户名是 `admin`，密码来自 `PORTFOLIO_AUTH_PASSWORD`。服务端会自动创建持仓数据文件。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；管理密码建议只写在本机的 `.env.prod`，该文件不会提交到 Git。服务默认监听 `0.0.0.0`，方便容器端口映射和 Nginx/OpenResty 反向代理访问；如果只想本机访问，可设置 `HOST=127.0.0.1`。
 
 ## 服务路径
 
@@ -53,7 +53,7 @@ npm start
 | `TUSHARE_REALTIME_MODE` | 否 | `http` | 默认走 Tushare HTTP Pro；只有设为 `crawler` 才按 `realtime_quote` 爬虫语义取数 |
 | `TUSHARE_ENDPOINT` | 否 | `http://api.tushare.pro` | Tushare HTTP endpoint |
 | `PORT` | 否 | `4173` | 本地服务端口 |
-| `HOST` | 否 | `127.0.0.1` | 服务监听地址；默认只允许本机访问 |
+| `HOST` | 否 | `0.0.0.0` | 服务监听地址；默认允许容器端口映射和反向代理访问，本机调试可设为 `127.0.0.1` |
 | `PORTFOLIO_CORS_ORIGINS` | 否 | `https://bytedarice.com,https://www.bytedarice.com` | 允许跨域访问公开展示 API 的 Origin 白名单 |
 | `PORTFOLIO_DATA_PATH` | 否 | `stock-portfolio/data/portfolio.json` | 持仓 JSON 数据文件路径 |
 | `PORTFOLIO_DB_PATH` | 否 | 无 | 旧配置兼容别名；未设置 `PORTFOLIO_DATA_PATH` 时会作为数据文件路径使用 |
