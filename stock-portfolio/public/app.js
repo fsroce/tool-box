@@ -2,13 +2,21 @@ const LEGACY_STORAGE_KEY = 'tool-box.stock-portfolio.holdings.v1';
 const REFRESH_INTERVAL_MS = 60_000;
 
 const elements = {
+  loginPanel: document.querySelector('#loginPanel'),
+  managerApp: document.querySelector('#managerApp'),
+  loginForm: document.querySelector('#loginForm'),
+  usernameInput: document.querySelector('#usernameInput'),
+  passwordInput: document.querySelector('#passwordInput'),
+  loginStatus: document.querySelector('#loginStatus'),
   form: document.querySelector('#holdingForm'),
   codeInput: document.querySelector('#codeInput'),
   nameInput: document.querySelector('#nameInput'),
   sharesInput: document.querySelector('#sharesInput'),
   costInput: document.querySelector('#costInput'),
+  resetFormBtn: document.querySelector('#resetFormBtn'),
   refreshBtn: document.querySelector('#refreshBtn'),
   autoRefreshInput: document.querySelector('#autoRefreshInput'),
+  logoutBtn: document.querySelector('#logoutBtn'),
   clearBtn: document.querySelector('#clearBtn'),
   holdingsBody: document.querySelector('#holdingsBody'),
   mobileHoldings: document.querySelector('#mobileHoldings'),
@@ -16,6 +24,7 @@ const elements = {
   statusText: document.querySelector('#statusText'),
   lastRefreshText: document.querySelector('#lastRefreshText'),
   nextRefreshText: document.querySelector('#nextRefreshText'),
+  authUserText: document.querySelector('#authUserText'),
   totalCostText: document.querySelector('#totalCostText'),
   totalMarketValue: document.querySelector('#totalMarketValue'),
   todayProfit: document.querySelector('#todayProfit'),
@@ -28,6 +37,9 @@ let quotes = new Map();
 let autoRefreshTimer;
 let lastRefreshAt;
 let isRefreshing = false;
+let authState = { authenticated: false, username: '', authEnabled: true, passwordConfigured: true };
+let codeLookupRequestId = 0;
+let nameWasAutoFilled = false;
 
 function loadLegacyHoldings() {
   try {
@@ -38,15 +50,35 @@ function loadLegacyHoldings() {
   }
 }
 
-async function requestJson(url, options = {}) {
+async function requestJson(url, options = {}, { skipAuthRedirect = false } = {}) {
   const response = await fetch(url, options);
   const payload = await response.json().catch(() => ({}));
+
+  if (response.status === 401 && !skipAuthRedirect) {
+    handleLoggedOut(payload.error || '登录已过期，请重新登录。');
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || '服务端请求失败。');
   }
 
   return payload;
+}
+
+async function fetchAuthStatus() {
+  return requestJson('/api/auth/status', {}, { skipAuthRedirect: true });
+}
+
+async function login(username, password) {
+  return requestJson('/api/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  }, { skipAuthRedirect: true });
+}
+
+async function logout() {
+  return requestJson('/api/auth/logout', { method: 'POST' }, { skipAuthRedirect: true });
 }
 
 async function fetchHoldings() {
@@ -71,29 +103,124 @@ async function clearServerHoldings() {
   await requestJson('/api/holdings', { method: 'DELETE' });
 }
 
+async function lookupCode(code) {
+  const payload = await requestJson(`/api/lookup?code=${encodeURIComponent(code)}`);
+  return payload;
+}
+
+function showManager(status) {
+  authState = {
+    authenticated: true,
+    username: status.username || 'admin',
+    authEnabled: status.authEnabled !== false,
+    passwordConfigured: status.passwordConfigured !== false,
+  };
+  elements.loginPanel.hidden = true;
+  elements.managerApp.hidden = false;
+  elements.authUserText.textContent = authState.authEnabled
+    ? `当前用户：${authState.username}`
+    : '当前用户：本机免鉴权';
+  elements.loginStatus.textContent = '';
+  resetAutoRefreshTimer();
+}
+
+function handleLoggedOut(message = '请先登录。') {
+  authState = { authenticated: false, username: '', authEnabled: true, passwordConfigured: true };
+  holdings = [];
+  quotes = new Map();
+  lastRefreshAt = undefined;
+  clearInterval(autoRefreshTimer);
+  elements.managerApp.hidden = true;
+  elements.loginPanel.hidden = false;
+  elements.loginStatus.textContent = message;
+  elements.loginStatus.className = 'auth-status';
+  elements.passwordInput.value = '';
+  if (!elements.usernameInput.value) {
+    elements.usernameInput.value = 'admin';
+  }
+  renderHoldings();
+  elements.usernameInput.focus();
+}
+
+async function initializeApp() {
+  renderHoldings();
+
+  try {
+    const status = await fetchAuthStatus();
+    if (status.authenticated || !status.authEnabled) {
+      showManager(status);
+      await loadHoldingsFromServer();
+      return;
+    }
+
+    authState = {
+      authenticated: false,
+      username: '',
+      authEnabled: status.authEnabled !== false,
+      passwordConfigured: status.passwordConfigured !== false,
+    };
+    elements.managerApp.hidden = true;
+    elements.loginPanel.hidden = false;
+    elements.loginForm.querySelector('button[type="submit"]').disabled = !authState.passwordConfigured;
+    elements.loginStatus.textContent = authState.passwordConfigured
+      ? ''
+      : '服务端未配置 PORTFOLIO_AUTH_PASSWORD，暂时无法登录。';
+    elements.loginStatus.className = 'auth-status';
+    if (!elements.usernameInput.value) {
+      elements.usernameInput.value = 'admin';
+    }
+    elements.usernameInput.focus();
+  } catch (error) {
+    handleLoggedOut(error instanceof Error ? error.message : '无法读取登录状态，请检查本地服务。');
+  }
+}
+
 async function migrateLegacyHoldingsIfNeeded() {
   const legacyHoldings = loadLegacyHoldings();
-  if (holdings.length || !legacyHoldings.length) {
+  if (!legacyHoldings.length) {
     return;
   }
 
   const imported = [];
+  const knownCodes = new Set(holdings.map((holding) => holding.code));
+  let skipped = 0;
+  let failed = 0;
+
   for (const legacyHolding of legacyHoldings) {
     const code = normalizeCode(legacyHolding.code);
     const shares = Number(legacyHolding.shares);
     const cost = Number(legacyHolding.cost);
     const name = String(legacyHolding.name || '').trim();
-    if (!code || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost) || cost < 0) {
+    if (!isSupportedCode(code) || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost) || cost < 0) {
+      skipped += 1;
       continue;
     }
 
-    imported.push(await persistHolding({ code, name, shares, cost }));
+    if (knownCodes.has(code)) {
+      skipped += 1;
+      continue;
+    }
+
+    try {
+      imported.push(await persistHolding({ code, name, shares, cost }));
+      knownCodes.add(code);
+    } catch {
+      failed += 1;
+    }
   }
 
   if (imported.length) {
     holdings = await fetchHoldings();
+  }
+
+  if (!failed) {
     localStorage.removeItem(LEGACY_STORAGE_KEY);
-    elements.statusText.textContent = `已从浏览器旧数据迁移 ${imported.length} 条持仓到服务端 SQLite。`;
+  }
+
+  if (imported.length || skipped || failed) {
+    elements.statusText.textContent = failed
+      ? `已迁移 ${imported.length} 条旧持仓，${failed} 条失败，旧数据已保留。`
+      : `已迁移 ${imported.length} 条旧持仓，跳过 ${skipped} 条已存在或无效数据。`;
   }
 }
 
@@ -132,6 +259,74 @@ function normalizeCode(code) {
   }
 
   return trimmed;
+}
+
+function isSupportedCode(code) {
+  return /^\d{6}\.(SH|SZ|BJ)$/.test(code) || /^\d{5}\.HK$/.test(code);
+}
+
+function applyAutoFilledName(name) {
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName) {
+    return false;
+  }
+
+  if (!elements.nameInput.value.trim() || nameWasAutoFilled) {
+    elements.nameInput.value = trimmedName;
+    nameWasAutoFilled = true;
+    return true;
+  }
+
+  return false;
+}
+
+async function lookupCodeName({ silent = false } = {}) {
+  const normalizedCode = normalizeCode(elements.codeInput.value);
+  if (!normalizedCode) {
+    return null;
+  }
+
+  elements.codeInput.value = normalizedCode;
+  if (!isSupportedCode(normalizedCode)) {
+    if (!silent) {
+      elements.statusText.textContent = '请填写有效的证券代码，例如 600519、000001、600519.SH 或 00700.HK。';
+    }
+    return null;
+  }
+
+  const cachedQuote = quotes.get(normalizedCode);
+  if (applyAutoFilledName(cachedQuote?.name)) {
+    return cachedQuote;
+  }
+
+  const requestId = ++codeLookupRequestId;
+  if (!silent) {
+    elements.statusText.textContent = `正在识别 ${normalizedCode} 的股票名称...`;
+  }
+
+  try {
+    const payload = await lookupCode(normalizedCode);
+    if (requestId !== codeLookupRequestId) {
+      return null;
+    }
+
+    if (payload.quote?.ts_code) {
+      quotes.set(payload.quote.ts_code, payload.quote);
+    }
+
+    const filled = applyAutoFilledName(payload.name || payload.quote?.name);
+    if (!silent) {
+      elements.statusText.textContent = filled
+        ? `已补全代码 ${normalizedCode}，股票名称为 ${elements.nameInput.value}。`
+        : `已补全代码 ${normalizedCode}，行情源暂未返回名称。`;
+    }
+    return payload.quote || null;
+  } catch (error) {
+    if (!silent) {
+      elements.statusText.textContent = error instanceof Error ? error.message : '股票名称识别失败。';
+    }
+    return null;
+  }
 }
 
 function escapeHtml(value) {
@@ -213,16 +408,23 @@ function buildRows() {
   });
 }
 
-function sumFinite(rows, key) {
-  const values = rows.map((row) => row[key]).filter(Number.isFinite);
-  return values.length ? values.reduce((total, value) => total + value, 0) : Number.NaN;
+function sumComplete(rows, key) {
+  if (!rows.length || rows.some((row) => !Number.isFinite(row[key]))) {
+    return Number.NaN;
+  }
+
+  return rows.reduce((total, row) => total + row[key], 0);
+}
+
+function sumKnown(rows, key) {
+  return rows.length ? rows.reduce((total, row) => total + row[key], 0) : Number.NaN;
 }
 
 function renderSummary(rows) {
-  const totalCost = sumFinite(rows, 'costValue');
-  const marketValue = sumFinite(rows, 'marketValue');
-  const todayProfit = sumFinite(rows, 'todayProfit');
-  const totalProfit = sumFinite(rows, 'totalProfit');
+  const totalCost = sumKnown(rows, 'costValue');
+  const marketValue = sumComplete(rows, 'marketValue');
+  const todayProfit = sumComplete(rows, 'todayProfit');
+  const totalProfit = sumComplete(rows, 'totalProfit');
   const returnRate = totalCost > 0 && Number.isFinite(totalProfit) ? totalProfit / totalCost : Number.NaN;
 
   elements.totalMarketValue.textContent = formatMoney(marketValue);
@@ -252,7 +454,7 @@ function renderDesktopRows(rows) {
       <td class="${signedClass(todayProfit)}">${formatMoney(todayProfit)}</td>
       <td class="${signedClass(totalProfit)}">${formatMoney(totalProfit)}</td>
       <td class="${signedClass(totalProfit)}">${formatPercent(returnRate)}</td>
-      <td>${quote?.date || '--'} ${quote?.time || ''}</td>
+      <td>${escapeHtml(quote?.date || '--')} ${escapeHtml(quote?.time || '')}</td>
       <td>
         <div class="row-actions">
           <button class="icon-button" data-action="edit" data-code="${escapeHtml(holding.code)}" type="button">编辑</button>
@@ -286,14 +488,16 @@ function renderMobileRows(rows) {
         <div><dt>总盈亏</dt><dd class="${signedClass(totalProfit)}">${formatMoney(totalProfit)}</dd></div>
         <div><dt>收益率</dt><dd class="${signedClass(totalProfit)}">${formatPercent(returnRate)}</dd></div>
       </dl>
-      <p>行情时间：${quote?.date || '--'} ${quote?.time || ''}</p>
+      <p>行情时间：${escapeHtml(quote?.date || '--')} ${escapeHtml(quote?.time || '')}</p>
     </article>
   `).join('');
 }
 
 function renderRefreshMeta() {
   elements.lastRefreshText.textContent = `上次刷新：${formatRefreshTime(lastRefreshAt)}`;
-  elements.nextRefreshText.textContent = elements.autoRefreshInput.checked
+  elements.nextRefreshText.textContent = !authState.authenticated
+    ? '自动刷新：登录后启用'
+    : elements.autoRefreshInput.checked
     ? `自动刷新：每 ${Math.round(REFRESH_INTERVAL_MS / 1000)} 秒`
     : '自动刷新：已关闭';
 }
@@ -309,7 +513,7 @@ function renderHoldings() {
 
 function resetAutoRefreshTimer() {
   clearInterval(autoRefreshTimer);
-  if (!elements.autoRefreshInput.checked) {
+  if (!authState.authenticated || !elements.autoRefreshInput.checked) {
     renderRefreshMeta();
     return;
   }
@@ -321,6 +525,10 @@ function resetAutoRefreshTimer() {
 }
 
 async function refreshQuotes({ silent = false } = {}) {
+  if (!authState.authenticated) {
+    return;
+  }
+
   if (isRefreshing) {
     return;
   }
@@ -335,25 +543,24 @@ async function refreshQuotes({ silent = false } = {}) {
   elements.refreshBtn.disabled = true;
   elements.refreshBtn.textContent = '刷新中...';
   if (!silent) {
-    elements.statusText.textContent = '正在从 Tushare 拉取行情...';
+    elements.statusText.textContent = '正在从行情源拉取行情...';
   }
 
   try {
-    const response = await fetch('/api/quotes', {
+    const payload = await requestJson('/api/quotes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ codes: holdings.map((holding) => holding.code) }),
     });
-    const payload = await response.json();
 
-    if (!response.ok) {
-      throw new Error(payload.error || '行情刷新失败。');
-    }
-
-    quotes = new Map(payload.quotes.map((quote) => [quote.ts_code, quote]));
+    const quoteList = Array.isArray(payload.quotes) ? payload.quotes : [];
+    quotes = new Map(quoteList.map((quote) => [quote.ts_code, quote]));
     lastRefreshAt = new Date(payload.fetchedAt);
     renderHoldings();
-    elements.statusText.textContent = `已更新 ${payload.quotes.length} 条行情。`;
+    const missingCodes = holdings.map((holding) => holding.code).filter((code) => !quotes.has(code));
+    elements.statusText.textContent = missingCodes.length
+      ? `已更新 ${quoteList.length} 条行情，${missingCodes.length} 条未返回：${missingCodes.join('、')}。`
+      : `已更新 ${quoteList.length} 条行情。`;
     resetAutoRefreshTimer();
   } catch (error) {
     elements.statusText.textContent = error instanceof Error ? error.message : '行情刷新失败。';
@@ -366,14 +573,20 @@ async function refreshQuotes({ silent = false } = {}) {
 
 elements.form.addEventListener('submit', async (event) => {
   event.preventDefault();
+  await lookupCodeName({ silent: true });
   const formData = new FormData(elements.form);
   const code = normalizeCode(formData.get('code'));
   const shares = Number(formData.get('shares'));
   const cost = Number(formData.get('cost'));
   const name = String(formData.get('name') || '').trim();
 
-  if (!code || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost) || cost < 0) {
-    elements.statusText.textContent = '请填写有效的代码、持仓数量和成本价。';
+  if (!isSupportedCode(code)) {
+    elements.statusText.textContent = '请填写有效的证券代码，例如 600519、000001、600519.SH 或 00700.HK。';
+    return;
+  }
+
+  if (!Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost) || cost < 0) {
+    elements.statusText.textContent = '请填写有效的持仓数量和成本价。';
     return;
   }
 
@@ -391,8 +604,11 @@ elements.form.addEventListener('submit', async (event) => {
     }
 
     elements.form.reset();
+    nameWasAutoFilled = false;
     renderHoldings();
-    elements.statusText.textContent = '持仓已保存到服务端 SQLite。';
+    elements.statusText.textContent = savedHolding.name
+      ? `持仓已保存到服务端 SQLite，名称为 ${savedHolding.name}。`
+      : '持仓已保存到服务端 SQLite。';
     refreshQuotes();
   } catch (error) {
     elements.statusText.textContent = error instanceof Error ? error.message : '保存持仓失败。';
@@ -419,6 +635,8 @@ async function handleHoldingAction(event) {
     elements.nameInput.value = holding.name || '';
     elements.sharesInput.value = holding.shares;
     elements.costInput.value = holding.cost;
+    nameWasAutoFilled = false;
+    elements.statusText.textContent = `正在编辑 ${holding.code}，保存后会覆盖这条持仓。`;
     elements.codeInput.focus();
     return;
   }
@@ -436,6 +654,63 @@ async function handleHoldingAction(event) {
     button.disabled = false;
   }
 }
+
+elements.loginForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const formData = new FormData(elements.loginForm);
+  const username = String(formData.get('username') || '').trim();
+  const password = String(formData.get('password') || '');
+  const submitButton = elements.loginForm.querySelector('button[type="submit"]');
+
+  submitButton.disabled = true;
+  submitButton.textContent = '登录中...';
+  elements.loginStatus.textContent = '正在验证身份...';
+
+  try {
+    const status = await login(username, password);
+    showManager(status);
+    await loadHoldingsFromServer();
+  } catch (error) {
+    elements.loginStatus.textContent = error instanceof Error ? error.message : '登录失败。';
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = '登录管理台';
+  }
+});
+
+elements.logoutBtn.addEventListener('click', async () => {
+  elements.logoutBtn.disabled = true;
+  try {
+    await logout();
+    handleLoggedOut('已退出登录。');
+  } catch (error) {
+    elements.statusText.textContent = error instanceof Error ? error.message : '退出登录失败。';
+  } finally {
+    elements.logoutBtn.disabled = false;
+  }
+});
+
+elements.resetFormBtn.addEventListener('click', () => {
+  elements.form.reset();
+  nameWasAutoFilled = false;
+  elements.statusText.textContent = '表单已重置。';
+});
+
+elements.codeInput.addEventListener('input', () => {
+  const rawCode = String(elements.codeInput.value || '').trim();
+  if (/^\d{6}$/.test(rawCode)) {
+    elements.codeInput.value = normalizeCode(rawCode);
+    lookupCodeName({ silent: true });
+  }
+});
+
+elements.codeInput.addEventListener('blur', () => {
+  lookupCodeName();
+});
+
+elements.nameInput.addEventListener('input', () => {
+  nameWasAutoFilled = false;
+});
 
 elements.holdingsBody.addEventListener('click', handleHoldingAction);
 elements.mobileHoldings.addEventListener('click', handleHoldingAction);
@@ -460,6 +735,4 @@ elements.clearBtn.addEventListener('click', async () => {
   }
 });
 
-renderHoldings();
-resetAutoRefreshTimer();
-loadHoldingsFromServer();
+initializeApp();

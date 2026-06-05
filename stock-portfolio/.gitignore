@@ -2,6 +2,7 @@
 .env.local
 .env.prod
 node_modules/
+.npm-cache/
 .DS_Store
 
 # Local SQLite databases

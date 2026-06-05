@@ -35,6 +35,48 @@ button:disabled { cursor: not-allowed; opacity: 0.65; }
   padding: 40px 0;
 }
 
+.manager-app[hidden],
+.auth-panel[hidden] {
+  display: none;
+}
+
+.auth-panel {
+  min-height: calc(100vh - 80px);
+  display: grid;
+  align-items: center;
+}
+
+.auth-card {
+  width: min(560px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(219, 229, 243, 0.9);
+  border-radius: 24px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.auth-card h1 {
+  margin-bottom: 12px;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.login-form .primary-button {
+  width: 100%;
+}
+
+.auth-status {
+  min-height: 24px;
+  margin: 14px 0 0;
+  color: var(--muted);
+}
+
 .hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -183,9 +225,21 @@ h2 { margin-bottom: 6px; font-size: 1.15rem; }
 
 .holding-form {
   display: grid;
-  grid-template-columns: 1.1fr 1.1fr 0.8fr 0.8fr auto;
+  grid-template-columns: 1.1fr 1.1fr 0.8fr 0.8fr minmax(180px, auto);
   gap: 14px;
   align-items: end;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.form-actions .primary-button,
+.form-actions .ghost-button {
+  flex: 1;
+  min-width: 0;
 }
 
 label span {
@@ -335,7 +389,7 @@ td { font-variant-numeric: tabular-nums; }
   .hero-actions { grid-template-columns: auto auto; justify-content: start; justify-items: start; align-items: center; }
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .holding-form { grid-template-columns: 1fr 1fr; }
-  .form-submit { grid-column: 1 / -1; }
+  .form-actions { grid-column: 1 / -1; }
 }
 
 @media (max-width: 720px) {
@@ -347,6 +401,7 @@ td { font-variant-numeric: tabular-nums; }
   .summary-grid { grid-template-columns: 1fr; }
   .section-heading { flex-direction: column; align-items: stretch; }
   .holding-form { grid-template-columns: 1fr; }
+  .form-actions { flex-direction: column; align-items: stretch; }
   .table-wrap { display: none; }
   .mobile-holdings { display: block; }
   .ghost-button { width: 100%; }
