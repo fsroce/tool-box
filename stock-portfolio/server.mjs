@@ -6,8 +6,12 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 
-function loadDotEnv() {
-  const envPath = join(root, '.env');
+function parseEnvValue(value = '') {
+  return value.trim().replace(/^['"]|['"]$/g, '');
+}
+
+function loadDotEnvFile(fileName, protectedKeys) {
+  const envPath = join(root, fileName);
   if (!existsSync(envPath)) {
     return;
   }
@@ -15,12 +19,26 @@ function loadDotEnv() {
   const lines = readFileSync(envPath, 'utf8').split(/\r?\n/);
   for (const line of lines) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)?\s*$/);
-    if (!match || process.env[match[1]] !== undefined) {
+    if (!match || protectedKeys.has(match[1])) {
       continue;
     }
 
-    const value = (match[2] || '').replace(/^['"]|['"]$/g, '');
-    process.env[match[1]] = value;
+    process.env[match[1]] = parseEnvValue(match[2]);
+  }
+}
+
+function loadDotEnv() {
+  const protectedKeys = new Set(Object.keys(process.env));
+  const envFiles = ['.env'];
+
+  if (process.env.NODE_ENV) {
+    envFiles.push(`.env.${process.env.NODE_ENV}`);
+  }
+
+  envFiles.push('.env.prod');
+
+  for (const fileName of [...new Set(envFiles)]) {
+    loadDotEnvFile(fileName, protectedKeys);
   }
 }
 

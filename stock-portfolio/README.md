@@ -16,13 +16,12 @@
 
 ```bash
 cd stock-portfolio
-cp .env.example .env
-# 编辑 .env，填入 TUSHARE_TOKEN
-set -a && source .env && set +a
+cp .env.prod.example .env.prod
+# 编辑 .env.prod，填入 TUSHARE_TOKEN
 npm start
 ```
 
-打开 <http://localhost:4173> 即可使用。
+打开 <http://localhost:4173> 即可使用。服务启动时会自动读取 `.env`、按 `NODE_ENV` 匹配的 `.env.<NODE_ENV>` 以及 `.env.prod`；真实 Token 建议写在本机的 `.env.prod`，该文件不会提交到 Git。
 
 ## 环境变量
 
@@ -32,6 +31,12 @@ npm start
 | `TUSHARE_API_NAME` | 否 | `realtime_quote` | Tushare API 名称，默认使用实时行情 |
 | `TUSHARE_ENDPOINT` | 否 | `http://api.tushare.pro` | Tushare Pro HTTP Endpoint |
 | `PORT` | 否 | `4173` | 本地服务端口 |
+
+## Token 文件建议
+
+- 可以把常用/生产 Token 写入 `stock-portfolio/.env.prod`，服务端启动时会自动读取，不需要每次 `source`。
+- 仓库只保留 `.env.prod.example` 模板；`.env.prod` 已加入 `.gitignore`，避免把真实 Token 泄露到 Git 历史。
+- 如果系统环境变量里已经设置了同名变量，会优先使用系统环境变量，不会被 `.env.prod` 覆盖。
 
 ## 注意事项
 
